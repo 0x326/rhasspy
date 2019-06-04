@@ -9,6 +9,7 @@ import wave
 import io
 import re
 import audioop
+import asyncio
 from queue import Queue
 from typing import Dict, Any, Callable, Optional, List, Type
 from collections import defaultdict
@@ -55,7 +56,7 @@ class StopRecordingToBuffer:
 
 
 def get_microphone_class(system: str) -> Type[RhasspyActor]:
-    assert system in ["arecord", "pyaudio", "dummy", "hermes", "stdin"], (
+    assert system in ["arecord", "pyaudio", "dummy", "hermes", "websocket", "stdin"], (
         "Unknown microphone system: %s" % system
     )
 
@@ -68,6 +69,9 @@ def get_microphone_class(system: str) -> Type[RhasspyActor]:
     elif system == "hermes":
         # Use MQTT
         return HermesAudioRecorder
+    elif system == "websocket":
+        # Use WebSocet
+        return WebSocketAudioRecorder
     elif system == "stdin":
         # Use STDIN
         return StdinAudioRecorder
@@ -592,6 +596,161 @@ class HermesAudioRecorder(RhasspyActor):
                 # Respond with buffer
                 buffer = self.buffers.pop(message.buffer_name, bytes())
                 self.send(message.receiver or sender, AudioData(buffer))
+
+    # -----------------------------------------------------------------------------
+
+    @classmethod
+    def get_microphones(self) -> Dict[Any, Any]:
+        return {}
+
+    @classmethod
+    def test_microphones(self, chunk_size: int) -> Dict[Any, Any]:
+        return {}
+
+
+# -----------------------------------------------------------------------------
+# Websocket-based audio "recorder" for web interface
+# -----------------------------------------------------------------------------
+
+
+class WebSocketAudioRecorder(RhasspyActor):
+    """Receives audio data from a websocket."""
+
+    def __init__(self) -> None:
+        RhasspyActor.__init__(self)
+        self.receivers: List[RhasspyActor] = []
+        self.buffers: Dict[str, bytes] = {}
+        self.server_thread = None
+
+    def to_started(self, from_state: str) -> None:
+        self.host = self.profile.get("microphone.websocket.host", "0.0.0.0")
+        self.port = int(self.profile.get("microphone.websocket.port", 12102))
+
+        self.preload: bool = self.config.get("preload", False)
+        if self.preload:
+            try:
+                self.create_server()
+            except Exception as e:
+                self._logger.warning(f"preload: {e}")
+
+    def in_started(self, message: Any, sender: RhasspyActor) -> None:
+        if isinstance(message, StartStreaming):
+            self.create_server()
+            self.receivers.append(message.receiver or sender)
+            self.transition("recording")
+        elif isinstance(message, StartRecordingToBuffer):
+            self.create_server()
+            self.buffers[message.buffer_name] = bytes()
+            self.transition("recording")
+
+    def to_recording(self, from_state: str) -> None:
+        self._logger.debug("Recording from microphone (websocket)")
+
+    def in_recording(self, message: Any, sender: RhasspyActor) -> None:
+        if isinstance(message, bytes):
+            # Extract audio data
+            with io.BytesIO(message) as wav_buffer:
+                with wave.open(wav_buffer, mode="rb") as wav_file:
+                    rate, width, channels = (
+                        wav_file.getframerate(),
+                        wav_file.getsampwidth(),
+                        wav_file.getnchannels(),
+                    )
+                    if (rate != 16000) or (width != 2) or (channels != 1):
+                        audio_data = convert_wav(message)
+                    else:
+                        # Use original data
+                        audio_data = wav_file.readframes(wav_file.getnframes())
+
+                    data_message = AudioData(audio_data)
+
+            # Forward to subscribers
+            for receiver in self.receivers:
+                self.send(receiver, data_message)
+
+            # Append to buffers
+            for buffer_name in self.buffers:
+                self.buffers[buffer_name] += data_message.data
+        elif isinstance(message, StartStreaming):
+            self.receivers.append(message.receiver or sender)
+        elif isinstance(message, StartRecordingToBuffer):
+            self.buffers[message.buffer_name] = bytes()
+        elif isinstance(message, StopStreaming):
+            if message.receiver is None:
+                # Clear all receivers
+                self.receivers.clear()
+            else:
+                self.receivers.remove(message.receiver)
+        elif isinstance(message, StopRecordingToBuffer):
+            if message.buffer_name is None:
+                # Clear all buffers
+                self.buffers.clear()
+            else:
+                # Respond with buffer
+                buffer = self.buffers.pop(message.buffer_name, bytes())
+                self.send(message.receiver or sender, AudioData(buffer))
+
+    def to_stopped(self, from_state: str) -> None:
+        self.server.stop()
+        self.server_thread.join()
+
+        self.server = None
+        self.server_thread = None
+        self._logger.debug("Stopped websocket server")
+
+    # -----------------------------------------------------------------------------
+
+    # def create_server(self):
+    #     if self.server_thread is None:
+    #         def run_server():
+    #             from simple_websocket_server import WebSocketServer, WebSocket
+    #             class Handler(WebSocket):
+    #                 def handle(self):
+    #                     self._logger.debug(len(self.data))
+
+    #             self.server = WebSocketServer(self.host, self.port, Handler)
+    #             self._logger.debug(
+    #                 f"Listening for audio data at ws://{self.host}:{self.port}"
+    #             )
+    #             self.server.serve_forever()
+
+    #         self.server_thread = threading.Thread(target=run_server, daemon=True)
+    #         self.server_thread.start()
+
+    async def handle_async(self, websocket, path):
+        import websockets
+        try:
+            while True:
+                audio_data = await websocket.recv()
+                self._logger.debug(
+                    f"Received {len(audio_data)} byte(s) with sum {sum(audio_data)}"
+                )
+                self.send(self.myAddress, bytes(audio_data))
+        except websockets.exceptions.ConnectionClosed:
+            pass
+
+    def create_server(self):
+        if self.server_thread is None:
+
+            def run_server():
+                asyncio.set_event_loop(asyncio.new_event_loop())
+
+                try:
+                    import websockets
+
+                    logging.getLogger("websockets.protocol").setLevel(logging.WARN)
+
+                    server = websockets.serve(self.handle_async, self.host, self.port)
+                    asyncio.get_event_loop().run_until_complete(server)
+                    asyncio.get_event_loop().run_forever()
+                except Exception as e:
+                    self._logger.exception("run_server")
+
+            self.server_thread = threading.Thread(target=run_server, daemon=True)
+            self.server_thread.start()
+            self._logger.debug(
+                f"Listening for audio data at ws://{self.host}:{self.port}"
+            )
 
     # -----------------------------------------------------------------------------
 

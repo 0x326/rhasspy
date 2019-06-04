@@ -239,6 +239,12 @@ const profileDefaults = {
             "program": "$RHASSPY_BASE_DIR/bin/mock-commands/sleep.sh",
             "arguments": []
         },
+        "porcupine": {
+            "library_path": "porcupine/libpv_porcupine.so",
+            "model_path": "porcupine/porcupine_params.pv",
+            "keyword_path": "porcupine/porcupine.ppn",
+            "sensitivity": 0.5
+        },
         "system": "pocketsphinx"
     }
 }
