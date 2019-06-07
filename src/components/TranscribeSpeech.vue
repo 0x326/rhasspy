@@ -246,14 +246,46 @@
                  this.audioContext = new AudioContext()
              }
 
-             if (this.recorder == null) {
-                 var that = this
-                 navigator.mediaDevices.getUserMedia({audio: true})
-                          .then(function(stream) {
-                              var input = that.audioContext.createMediaStreamSource(stream)
-                              that.recorder = new Recorder(input)
-                          })
+             var that = this
+             var websocket = new WebSocket('ws://127.0.0.1:12102/')
+             websocket.onopen = function() {
+                 console.log(websocket)
+                 navigator.mediaDevices
+                        .getUserMedia({ audio: { sampleRate: 16000, channels: 1, sampleSize: 16 } })
+                        .then(function(stream) {
+                            var input = that.audioContext.createMediaStreamSource(stream)
+                            var recorder = new Recorder(input)
+                            recorder.record()
+
+                            var id = setInterval(() => {
+                                recorder.exportWAV(function(blob) {
+                                    recorder.clear()
+                                    websocket.send(blob)
+                                })
+                            }, 100)
+
+                            console.log("start")
+
+                            setTimeout(() => {
+                                clearInterval(id)
+                                recorder.stop()
+                                console.log("stopped")
+                            }, 50000)
+                        })
              }
+
+             websocket.onerror = function() {
+                 console.log("Error")
+             }
+
+             /* if (this.recorder == null) { */
+             /* var that = this */
+             /* navigator.mediaDevices.getUserMedia({audio: true}) */
+             /* .then(function(stream) { */
+             /* var input = that.audioContext.createMediaStreamSource(stream) */
+             /* that.recorder = new Recorder(input) */
+             /* }) */
+             /* } */
          },
 
          saySentence: function(event) {
