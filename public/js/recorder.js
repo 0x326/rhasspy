@@ -49,6 +49,7 @@ var Recorder = exports.Recorder = (function () {
         this.recording = false;
         this.callbacks = {
             getBuffer: [],
+            exportWAVAndClear: [],
             exportWAV: []
         };
 
@@ -96,6 +97,9 @@ var Recorder = exports.Recorder = (function () {
                     case 'clear':
                         clear();
                         break;
+                    case 'exportWAVAndClear':
+                        exportWAVAndClear();
+                        break;
                 }
             };
 
@@ -141,6 +145,26 @@ var Recorder = exports.Recorder = (function () {
                 recLength = 0;
                 recBuffers = [];
                 initBuffers();
+            }
+
+            function exportWAVAndClear(type) {
+                var buffers = [];
+                for (var channel = 0; channel < numChannels; channel++) {
+                    buffers.push(mergeBuffers(recBuffers[channel], recLength));
+                }
+
+                clear();
+
+                var interleaved = undefined;
+                if (numChannels === 2) {
+                    interleaved = interleave(buffers[0], buffers[1]);
+                } else {
+                    interleaved = buffers[0];
+                }
+                var dataview = encodeWAV(interleaved);
+                var audioBlob = new Blob([dataview], { type: type });
+
+                self.postMessage({ command: 'exportWAVAndClear', data: audioBlob });
             }
 
             function initBuffers() {
@@ -264,6 +288,20 @@ var Recorder = exports.Recorder = (function () {
             this.callbacks.getBuffer.push(cb);
 
             this.worker.postMessage({ command: 'getBuffer' });
+        }
+    }, {
+        key: 'exportWAVAndClear',
+        value: function exportWAVAndClear(cb, mimeType) {
+            mimeType = mimeType || this.config.mimeType;
+            cb = cb || this.config.callback;
+            if (!cb) throw new Error('Callback not set');
+
+            this.callbacks.exportWAVAndClear.push(cb);
+
+            this.worker.postMessage({
+                command: 'exportWAVAndClear',
+                type: mimeType
+            });
         }
     }, {
         key: 'exportWAV',

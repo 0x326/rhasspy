@@ -254,12 +254,11 @@
                         .getUserMedia({ audio: { sampleRate: 16000, channels: 1, sampleSize: 16 } })
                         .then(function(stream) {
                             var input = that.audioContext.createMediaStreamSource(stream)
-                            var recorder = new Recorder(input)
+                            var recorder = new Recorder(input, { numChannels: 1 })
                             recorder.record()
 
                             var id = setInterval(() => {
-                                recorder.exportWAV(function(blob) {
-                                    recorder.clear()
+                                recorder.exportWAVAndClear(function(blob) {
                                     websocket.send(blob)
                                 })
                             }, 100)
@@ -283,7 +282,7 @@
              /* navigator.mediaDevices.getUserMedia({audio: true}) */
              /* .then(function(stream) { */
              /* var input = that.audioContext.createMediaStreamSource(stream) */
-             /* that.recorder = new Recorder(input) */
+             /* that.recorder = new Recorder(input, { numChannels: 1 }) */
              /* }) */
              /* } */
          },
