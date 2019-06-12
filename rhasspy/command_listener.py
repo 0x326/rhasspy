@@ -217,6 +217,7 @@ class WebrtcvadCommandListener(RhasspyActor):
         # Detect speech in chunk
         assert self.vad is not None
         is_speech = self.vad.is_speech(data, self.sample_rate)
+        self._logger.debug(is_speech)
 
         if is_speech and self.speech_buffers_left > 0:
             self.speech_buffers_left -= 1

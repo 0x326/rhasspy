@@ -251,24 +251,27 @@
              websocket.onopen = function() {
                  console.log(websocket)
                  navigator.mediaDevices
-                        .getUserMedia({ audio: { sampleRate: 16000, channels: 1, sampleSize: 16 } })
+                        .getUserMedia({ audio: true })
                         .then(function(stream) {
-                            var input = that.audioContext.createMediaStreamSource(stream)
-                            var recorder = new Recorder(input, { numChannels: 1 })
-                            recorder.record()
-
-                            var id = setInterval(() => {
-                                recorder.exportWAVAndClear(function(blob) {
-                                    websocket.send(blob)
+                            var recorder = new RecordRTC(
+                                stream,
+                                {
+                                    type: "audio",
+                                    mimeType: "audio/wav",
+                                    recorderType: StereoAudioRecorder,
+                                    desiredSampRate: 16000,
+                                    numberOfAudioChannels: 1,
+                                    timeSlice: 100,
+                                    ondataavailable: function(blob) {
+                                        websocket.send(blob)
+                                    }
                                 })
-                            }, 100)
 
-                            console.log("start")
+                            recorder.startRecording()
 
-                            setTimeout(() => {
-                                clearInterval(id)
-                                recorder.stop()
-                                console.log("stopped")
+                            setTimeout(function() {
+                                recorder.stopRecording()
+                                recorder.reset()
                             }, 50000)
                         })
              }
